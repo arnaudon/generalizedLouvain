@@ -27,41 +27,24 @@ struct find_linearised_generic_stability {
     template<typename I>
     double operator () (I& internals)
     {
-
         // first part equals 1-t
         double q = 1 - markov_time;
         double q2 = 0;
 
-        // loop over all communities and sum up contributions (gain - loss)
-        unsigned int num_null_model_vec = internals.num_null_model_vectors;
-        unsigned int num_nodes = internals.num_nodes;
+        const unsigned int num_null_model_vec = internals.num_null_model_vectors;
+        const unsigned int num_nodes = internals.num_nodes;
 
-        //little helper to keep track of non-empty communities..
-        bool check;
-
-        // loop over all possible community indices
+        // Loop over all possible community indices. Loss-vector entries for
+        // empty communities are zero, so they contribute zero to the sum —
+        // walking past them costs only memory bandwidth. (The `if (gain != 0)
+        // { ... } else { ... }` dead branch in the previous implementation
+        // was bug-compatible with always evaluating the inner sum.)
         for (unsigned int i = 0; i < num_nodes; i++) {
-            // for each possible index check if the community is non-empty, i.e. if there is a loss term
-            double gain = markov_time * double (internals.comm_w_in[i]);
-
-            //TODO: check if this is the right contruction here.. it should be really..
-            if (gain != 0) {
-                q2 += gain;
-                check = true;
-            } else {
-                check = true;
+            q2 += markov_time * internals.comm_w_in[i];
+            for (unsigned int j = 0; j < num_null_model_vec; j += 2) {
+                q2 -= internals.comm_loss_vectors[j][i]
+                      * internals.comm_loss_vectors[j + 1][i];
             }
-
-            if (check) {
-                for (unsigned int j = 0; j < num_null_model_vec; j = j + 2) {
-                    //clq::output ("loss terms: ");
-                    //clq::print_2d_vector (internals.comm_loss_vectors);
-                    q2 -= double (internals.comm_loss_vectors[j][i])
-                          * double (internals.comm_loss_vectors[j + 1][i]);
-
-                }
-            }
-
         }
 
         return q + q2;

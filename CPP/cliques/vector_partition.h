@@ -2,7 +2,8 @@
 
 #include <vector>
 #include <set>
-#include <map>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace clq
 {
@@ -95,15 +96,16 @@ public:
     // count number of distinct communities in partition vector
     int set_count()
     {
-        std::set<int> seen_nodes;
-    
+        std::unordered_set<int> seen_nodes;
+        seen_nodes.reserve(partition_vector.size());
+
         for (auto itr = partition_vector.begin(); itr != partition_vector.end(); ++itr) {
             if (*itr != -1) {
                 seen_nodes.insert (*itr);
             }
         }
-    
-        return seen_nodes.size();
+
+        return static_cast<int>(seen_nodes.size());
     }
 
     // return vector with all nodes that are part of community set_id
@@ -129,55 +131,40 @@ public:
     // Normalise IDs in partition vector.
     // Modifies IDs such that they are contiguous and start at 0
     // e.g. 2,1,4,2 -> 0,1,2,0
-    // returns map from new IDs to previous IDs.
-    std::map<int, int> normalise_ids()
+    // Returns a vector mapping new IDs to previous IDs (index = new id).
+    std::vector<int> normalise_ids()
     {
-        // Mapping from new set ids to old set ids
-        std::map<int, int> set_new_to_old;
-
-        // Check if already normalised, if yes contruct identity mapping
-        // and return, if node normalise and construct mapping
         if (!is_normalised) {
             int start_num = 0;
-            std::map<int, int> set_old_to_new;
+            std::unordered_map<int, int> set_old_to_new;
+            set_old_to_new.reserve(partition_vector.size());
+            std::vector<int> set_new_to_old;
+            set_new_to_old.reserve(partition_vector.size());
 
-            // For every element, make a map
             for (auto itr = partition_vector.begin(); itr != partition_vector.end(); ++itr) {
-
-                // Find current node ID in old to new mapping
-                std::map<int, int>::iterator old_set = set_old_to_new.find (*itr);
-                
-                // if not present in mapping (mind the order!) 
-                // a) update mappings
-                // b) assign node ID to new contiguous ID
-                // c) update counter
-                if (old_set == set_old_to_new.end() ) {
-                    set_old_to_new[*itr] = start_num;
-                    set_new_to_old[start_num] = *itr;
-
+                auto found = set_old_to_new.find(*itr);
+                if (found == set_old_to_new.end()) {
+                    set_old_to_new.emplace(*itr, start_num);
+                    set_new_to_old.push_back(*itr);
                     *itr = start_num;
-                    start_num++;
-                
-                // already found in mapping -- just assign to new ID
+                    ++start_num;
                 } else {
-                    *itr = old_set->second;
+                    *itr = found->second;
                 }
             }
-            
-            // set state variable and return..
+
             is_normalised = true;
             return set_new_to_old;
-
-        } else {
-
-            // Still need to reconstruct a new to old mapping even if it is 
-            // the identity (since we don't store it)
-            for (auto itr = partition_vector.begin(); itr != partition_vector.end(); ++itr) {
-                set_new_to_old[*itr] = *itr;
-            }
-
-            return set_new_to_old;
         }
+
+        // Already normalised: identity mapping, size = number of distinct ids.
+        int max_id = -1;
+        for (int v : partition_vector) {
+            if (v > max_id) max_id = v;
+        }
+        std::vector<int> set_new_to_old(static_cast<std::size_t>(max_id + 1));
+        for (int i = 0; i <= max_id; ++i) set_new_to_old[i] = i;
+        return set_new_to_old;
     }
 
 
