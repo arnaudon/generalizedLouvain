@@ -17,45 +17,49 @@ namespace clq
 // For convenience let's get rid of some cumbersome notation..
 typedef std::vector<std::vector<double>> vec2;
 
+struct BestMove {
+    unsigned int best_comm;
+    double net_delta;  // change in global Q if best_comm != original; 0 otherwise
+};
+
 /**
- @brief  find_best_comm_move -- find the community with the largest gain in quality 
- for a particular node.
+ @brief  find_best_comm_move -- find the community with the largest gain in quality
+ for a particular node, and return the resulting net change in global quality.
 
- @param[in]  compute_quality_diff -- functor to compute difference in quality
- @param[in]  node_id -- Id of the node to move (into another community)
- @param[in]  internals -- Internals object storing the statistics for the current partition
- @param[in] community_id -- current community_id of the node 
- 
- @param[out] (int) -- id of the community with the largest gain in quality 
-
+ The change in global Q from one full isolate→find_best→insert step equals
+ `gain_at_best - gain_at_original` (both evaluated against the post-isolation
+ internals). When the chosen community is the original, the delta is exactly
+ zero — the partition is unchanged.
  */
 template <typename QD, typename L>
-unsigned int find_best_comm_move( QD compute_quality_diff, unsigned int node_id, L internals,
-                            unsigned int comm_id )
+BestMove find_best_comm_move( QD compute_quality_diff, unsigned int node_id, L &internals,
+                              unsigned int comm_id )
 {
     unsigned int num_neighbour_communities = internals.neighbouring_communities_list.size();
 
-    //default option for re-inclusion of node
     unsigned int best_comm = comm_id;
     double best_gain = 0;
+    double gain_at_orig = 0;  // gain of re-inserting back into the original community
+                              // (0 when orig is empty after isolation, i.e. not in the neighbour list)
 
-    // loop over neighbouring communities
     for( unsigned int k = 0; k < num_neighbour_communities; ++k ) {
-
         unsigned int comm_id_neighbour = internals.neighbouring_communities_list[k];
         double gain = compute_quality_diff( internals, comm_id_neighbour, node_id );
+
+        if( comm_id_neighbour == comm_id ) {
+            gain_at_orig = gain;
+        }
 
         if( gain > best_gain ) {
             best_comm = comm_id_neighbour;
             best_gain = gain;
-            // avoid not necessary movements, place node in old community if possible
         } else if( gain == best_gain && comm_id == comm_id_neighbour ) {
             best_comm = comm_id;
         }
-
     }
 
-    return best_comm;
+    double net_delta = ( best_comm == comm_id ) ? 0.0 : ( best_gain - gain_at_orig );
+    return { best_comm, net_delta };
 }
 
 
@@ -113,14 +117,16 @@ P fold_partition_into_orginal_graph_size( std::vector<P>& optimal_partitions, P 
  
  @param[out] (vec2) -- vector of vectors,  containing the reduced null model vectors
  */
-vec2 create_reduced_null_model_vec( std::map<int, int> new_comm_id_to_old_comm_id, LinearisedInternalsGeneric internals,
+vec2 create_reduced_null_model_vec( const std::vector<int>& new_comm_id_to_old_comm_id,
+                                    const LinearisedInternalsGeneric& internals,
                                     unsigned int num_null_model_vectors, unsigned int num_nodes_reduced_graph )
 {
     vec2 reduced_null_model_vec( num_null_model_vectors, std::vector<double> ( num_nodes_reduced_graph, 0 ) );
 
     for( unsigned int k = 0; k < num_nodes_reduced_graph; ++k ) {
+        int old_comm_id = new_comm_id_to_old_comm_id[k];
         for( unsigned int j = 0; j < num_null_model_vectors; ++j ) {
-            reduced_null_model_vec[j][k] = internals.comm_loss_vectors[j][new_comm_id_to_old_comm_id[k]];
+            reduced_null_model_vec[j][k] = internals.comm_loss_vectors[j][old_comm_id];
         }
     }
 
@@ -145,7 +151,7 @@ vec2 create_reduced_null_model_vec( std::map<int, int> new_comm_id_to_old_comm_i
 
  */
 template<typename P, typename T, typename W, typename QF, typename QFDIFF>
-double find_optimal_partition_louvain_gen( T& graph, W& weights, vec2 null_model_vec,
+double find_optimal_partition_louvain_gen( T& graph, W& weights, const vec2& null_model_vec,
         QF compute_quality, QFDIFF compute_quality_diff, P initial_partition,
         std::vector<P>& optimal_partitions, double minimum_improve,
         std::mt19937& rng )
@@ -153,30 +159,22 @@ double find_optimal_partition_louvain_gen( T& graph, W& weights, vec2 null_model
 
     typedef typename T::Node Node;
     typedef typename T::NodeIt NodeIt;
-    
+
     // set up initial partitions
     P partition( initial_partition );
 
-    double current_quality, old_quality;
-    bool did_nodes_move = false;
     bool do_construct_new_graph = false;
 
-    //clq::output( "\n\nFirst part of Louvain, current_quality", current_quality );
     LinearisedInternalsGeneric internals( graph, weights, partition, null_model_vec );
 
-    current_quality = compute_quality( internals );
-    //clq::output( "\n\nFirst part of Louvain after internals, current_quality", current_quality );
-    //clq::print_partition_list( partition );
-    //clq::output( "end partition list \n" );
-
-    // Randomise the looping over nodes using the caller-provided RNG.
+    // Build the visit order (initially one slot per node, randomised below).
     std::vector<Node> nodes_ordered_randomly;
+    nodes_ordered_randomly.reserve( static_cast<std::size_t>( lemon::countNodes( graph ) ) );
 
     for( NodeIt temp_node( graph ); temp_node != lemon::INVALID; ++temp_node ) {
         nodes_ordered_randomly.push_back( temp_node );
     }
 
-    //clq::output( "Reshuffling ", lemon::countNodes( graph ), "Nodes" );
     // Portable Fisher-Yates: bit-identical across libstdc++/libc++ given the
     // same mt19937 state. std::shuffle's internal distribution is
     // implementation-defined and would diverge between platforms.
@@ -184,91 +182,90 @@ double find_optimal_partition_louvain_gen( T& graph, W& weights, vec2 null_model
         std::size_t j = rng() % i;
         std::swap( nodes_ordered_randomly[j], nodes_ordered_randomly[i - 1] );
     }
-    //clq::output( "Reshuffling done" );
 
-    do {
-        // re-initialise quality and keep track of movements
-        did_nodes_move = false;
-        old_quality = current_quality;
+    // Queue-based fast-move (Leiden-style pruning): start with every node
+    // dirty, in shuffled order, and re-queue a node's neighbours whenever it
+    // moves. This is deterministic given the seed since the queue is FIFO and
+    // the initial fill respects the shuffle. Runs strictly less work than the
+    // classical "sweep all nodes" loop yet converges to the same fixed point.
+    const std::size_t n = nodes_ordered_randomly.size();
+    std::vector<unsigned char> in_queue( n, 1u );
+    std::vector<int> queue;
+    queue.reserve( n );
+    for( const Node &node : nodes_ordered_randomly ) {
+        queue.push_back( graph.id( node ) );
+    }
+    std::size_t head = 0;
 
-        // loop over all nodes in random order
-        for( auto n1_it = nodes_ordered_randomly.begin(); n1_it != nodes_ordered_randomly.end(); ++n1_it ) {
+    while( head < queue.size() ) {
+        int node_id = queue[head++];
+        in_queue[node_id] = 0u;
 
-            // get node id and comm id
-            Node n1 = *n1_it;
-            unsigned int node_id = graph.id( n1 );
-            unsigned int comm_id = partition.find_set( node_id );
-            //clq::output( "NodeID: ", node_id, "CommID: ", comm_id, "Crash here?" );
-            isolate_and_update_internals( graph, weights, n1, internals, partition );
+        Node n1 = graph.nodeFromId( node_id );
+        unsigned int comm_id = partition.find_set( node_id );
 
-            unsigned int best_comm  = find_best_comm_move( compute_quality_diff, node_id, internals, comm_id );
+        isolate_and_update_internals( graph, weights, n1, internals, partition );
+        BestMove move = find_best_comm_move( compute_quality_diff,
+                                             static_cast<unsigned int>( node_id ),
+                                             internals, comm_id );
+        insert_and_update_internals( graph, weights, n1, internals, partition, move.best_comm );
 
-            insert_and_update_internals( graph, weights, n1, internals, partition, best_comm );
-
-            // if there has been any move node
-            if( best_comm != comm_id ) {
-                did_nodes_move = true;
-                do_construct_new_graph = true;
+        if( move.best_comm != comm_id ) {
+            do_construct_new_graph = true;
+            // Only re-enqueue neighbours when the move's improvement clears
+            // the noise floor, mirroring the original `> minimum_improve`
+            // termination criterion (now applied per move rather than per
+            // sweep).
+            if( move.net_delta > minimum_improve ) {
+                const std::size_t beg = internals.nbr.start[node_id];
+                const std::size_t end = internals.nbr.start[node_id + 1];
+                for( std::size_t e = beg; e < end; ++e ) {
+                    int nbr_id = internals.nbr.node[e];
+                    if( !in_queue[nbr_id] ) {
+                        in_queue[nbr_id] = 1u;
+                        queue.push_back( nbr_id );
+                    }
+                }
             }
         }
-
-        if( did_nodes_move ) {
-            current_quality = compute_quality( internals );
-            //clq::output( "current quality: ", current_quality );
-        }
-
-
-    } while( ( current_quality - old_quality ) > minimum_improve );
-
-    //clq::output( "Optimization round finished; current_quality", current_quality );
-    //clq::print_partition_list( partition );
-    //clq::output( "partition above; now starting second phase" );
+    }
 
     ////////////////////////////////////////////////////////////
     // Start Second phase - create reduced graph with self loops
     ////////////////////////////////////////////////////////////
 
     // 1) Normalise partition IDs and store next level in optimal partitions found by Louvain
-    std::map<int, int> new_comm_id_to_old_comm_id = partition.normalise_ids();
+    std::vector<int> new_comm_id_to_old_comm_id = partition.normalise_ids();
 
     // 2) If there has actually been some movement, then we need to assemble a new graph
     if( do_construct_new_graph == true ) {
-        // Compile P into original partition size. If there has been a move, then we
-        // want to store the intermediate result of the Louvain method. If there has been no move, then the
-        // partition in the previous level was optimal.
         P partition_original_nodes = fold_partition_into_orginal_graph_size( optimal_partitions, partition );
         optimal_partitions.push_back( partition_original_nodes );
-        //clq::output("Optimal partition: ", optimal_partitions.size());
-        //clq::print_partition_list( partition );
-        //clq::output( "renormalized partition above; now starting second phase" );
 
-        //clq::output( "Constructing new graph" );
-        // Create graph from partition
         T reduced_graph;
         W reduced_weights( reduced_graph );
         create_reduced_graph_from_partition( reduced_graph, reduced_weights, graph, weights, partition,
                                              new_comm_id_to_old_comm_id, internals );
 
-        // get number of nodes in new reduced graph and initialise partition + new null model vectors
         unsigned int num_nodes_reduced_graph = lemon::countNodes( reduced_graph );
         P reduced_partition( num_nodes_reduced_graph );
         reduced_partition.initialise_as_singletons();
-        // initialise reduced null model_vec
-        auto reduced_null_model_vec = create_reduced_null_model_vec( new_comm_id_to_old_comm_id,internals,null_model_vec.size(),
+        auto reduced_null_model_vec = create_reduced_null_model_vec( new_comm_id_to_old_comm_id, internals,
+                                      static_cast<unsigned int>( null_model_vec.size() ),
                                       num_nodes_reduced_graph );
 
-        //clq::output( "reduced null vectors" );
-        //clq::print_2d_vector( reduced_null_model_vec );
-
-        return find_optimal_partition_louvain_gen( reduced_graph,reduced_weights,reduced_null_model_vec,compute_quality,
-                compute_quality_diff,reduced_partition,optimal_partitions, minimum_improve, rng );
+        return find_optimal_partition_louvain_gen( reduced_graph, reduced_weights, reduced_null_model_vec,
+                compute_quality, compute_quality_diff, reduced_partition, optimal_partitions, minimum_improve, rng );
     } else {
-        //clq::output( "Reached bottom", current_quality );
-        if (optimal_partitions.size() == 0){
-            optimal_partitions.push_back(partition);
+        if( optimal_partitions.empty() ) {
+            optimal_partitions.push_back( partition );
         }
-        return current_quality;
-    }    
+        // Final quality is computed exactly once, at the bottom of the
+        // recursion — the per-sweep recompute that the original code did is
+        // unnecessary because the stopping condition only needs the per-move
+        // delta, which we track inline.
+        return compute_quality( internals );
+    }
 }
 
 
@@ -297,123 +294,94 @@ double find_optimal_partition_louvain( T& graph, W& weights,
 
     typedef typename T::Node Node;
     typedef typename T::NodeIt NodeIt;
-    
-    // set up initial partitions
+
     P partition( initial_partition );
     P partition_init( initial_partition );
 
-    double current_quality, old_quality;
-    bool did_nodes_move = false;
     bool do_construct_new_graph = false;
 
-    //clq::output( "\n\nFirst part of Louvain, current_quality", current_quality );
     if( !optimal_partitions.empty() ) {
         partition_init = optimal_partitions.back();
     }
 
-    auto internals = clq::gen_internals( compute_quality, graph, weights, partition, partition_init);
+    auto internals = clq::gen_internals( compute_quality, graph, weights, partition, partition_init );
 
-    current_quality = compute_quality( internals );
-    //clq::output( "\n\nFirst part of Louvain after internals, current_quality", current_quality );
-    //clq::print_partition_list( partition );
-    //clq::output( "end partition list \n" );
-
-    // Randomise the looping over nodes using the caller-provided RNG.
     std::vector<Node> nodes_ordered_randomly;
+    nodes_ordered_randomly.reserve( static_cast<std::size_t>( lemon::countNodes( graph ) ) );
 
     for( NodeIt temp_node( graph ); temp_node != lemon::INVALID; ++temp_node ) {
         nodes_ordered_randomly.push_back( temp_node );
     }
 
-    //clq::output( "Reshuffling ", lemon::countNodes( graph ), "Nodes" );
-    // Portable Fisher-Yates: bit-identical across libstdc++/libc++ given the
-    // same mt19937 state. std::shuffle's internal distribution is
-    // implementation-defined and would diverge between platforms.
     for( std::size_t i = nodes_ordered_randomly.size(); i > 1; --i ) {
         std::size_t j = rng() % i;
         std::swap( nodes_ordered_randomly[j], nodes_ordered_randomly[i - 1] );
     }
-    //clq::output( "Reshuffling done" );
 
-    do {
-        // re-initialise quality and keep track of movements
-        did_nodes_move = false;
-        old_quality = current_quality;
+    const std::size_t n = nodes_ordered_randomly.size();
+    std::vector<unsigned char> in_queue( n, 1u );
+    std::vector<int> queue;
+    queue.reserve( n );
+    for( const Node &node : nodes_ordered_randomly ) {
+        queue.push_back( graph.id( node ) );
+    }
+    std::size_t head = 0;
 
-        // loop over all nodes in random order
-        for( auto n1_it = nodes_ordered_randomly.begin(); n1_it != nodes_ordered_randomly.end(); ++n1_it ) {
+    while( head < queue.size() ) {
+        int node_id = queue[head++];
+        in_queue[node_id] = 0u;
 
-            // get node id and comm id
-            Node n1 = *n1_it;
-            unsigned int node_id = graph.id( n1 );
-            unsigned int comm_id = partition.find_set( node_id );
-            //clq::output( "NodeID: ", node_id, "CommID: ", comm_id, "Crash here?" );
-            isolate_and_update_internals( graph, weights, n1, internals, partition );
+        Node n1 = graph.nodeFromId( node_id );
+        unsigned int comm_id = partition.find_set( node_id );
 
-            unsigned int best_comm  = find_best_comm_move( compute_quality_diff, node_id, internals, comm_id );
+        isolate_and_update_internals( graph, weights, n1, internals, partition );
+        BestMove move = find_best_comm_move( compute_quality_diff,
+                                             static_cast<unsigned int>( node_id ),
+                                             internals, comm_id );
+        insert_and_update_internals( graph, weights, n1, internals, partition, move.best_comm );
 
-            insert_and_update_internals( graph, weights, n1, internals, partition, best_comm );
-
-            // if there has been any move node
-            if( best_comm != comm_id ) {
-                did_nodes_move = true;
-                do_construct_new_graph = true;
+        if( move.best_comm != comm_id ) {
+            do_construct_new_graph = true;
+            if( move.net_delta > minimum_improve ) {
+                const std::size_t beg = internals.nbr.start[node_id];
+                const std::size_t end = internals.nbr.start[node_id + 1];
+                for( std::size_t e = beg; e < end; ++e ) {
+                    int nbr_id = internals.nbr.node[e];
+                    if( !in_queue[nbr_id] ) {
+                        in_queue[nbr_id] = 1u;
+                        queue.push_back( nbr_id );
+                    }
+                }
             }
         }
-
-        if( did_nodes_move ) {
-            current_quality = compute_quality( internals );
-            //clq::output( "current quality: ", current_quality );
-        }
-
-
-    } while( ( current_quality - old_quality ) > minimum_improve );
-
-    //clq::output( "Optimization round finished; current_quality", current_quality );
-    //clq::print_partition_list( partition );
-    //clq::output( "partition above; now starting second phase" );
+    }
 
     ////////////////////////////////////////////////////////////
     // Start Second phase - create reduced graph with self loops
     ////////////////////////////////////////////////////////////
 
-    // 1) Normalise partition IDs and store next level in optimal partitions found by Louvain
-    std::map<int, int> new_comm_id_to_old_comm_id = partition.normalise_ids();
+    std::vector<int> new_comm_id_to_old_comm_id = partition.normalise_ids();
 
-    // 2) If there has actually been some movement, then we need to assemble a new graph
     if( do_construct_new_graph == true ) {
-        // Compile P into original partition size. If there has been a move, then we 
-        // want to store the intermediate result of the Louvain method. If there has been no move, then the
-        // partition in the previous level was optimal.
         P partition_original_nodes = fold_partition_into_orginal_graph_size( optimal_partitions, partition );
         optimal_partitions.push_back( partition_original_nodes );
-        //clq::output("Optimal partition: ", optimal_partitions.size());
-        //clq::print_partition_list( partition );
-        //clq::output( "renormalized partition above; now starting second phase" );
-        
-        //clq::output( "Constructing new graph" );
-        // Create graph from partition
+
         T reduced_graph;
         W reduced_weights( reduced_graph );
         create_reduced_graph_from_partition( reduced_graph, reduced_weights, graph, weights, partition,
                                              new_comm_id_to_old_comm_id, internals );
 
-        // get number of nodes in new reduced graph and initialise partition + new null model vectors
         unsigned int num_nodes_reduced_graph = lemon::countNodes( reduced_graph );
         P reduced_partition( num_nodes_reduced_graph );
         reduced_partition.initialise_as_singletons();
 
-        //clq::output( "reduced null vectors" );
-        //clq::print_2d_vector( reduced_null_model_vec );
-
-        return find_optimal_partition_louvain( reduced_graph,reduced_weights,compute_quality,
-                compute_quality_diff,reduced_partition,optimal_partitions, minimum_improve, rng );
+        return find_optimal_partition_louvain( reduced_graph, reduced_weights, compute_quality,
+                compute_quality_diff, reduced_partition, optimal_partitions, minimum_improve, rng );
     } else {
-        //clq::output( "Reached bottom", current_quality );
-        if (optimal_partitions.size() == 0){
-            optimal_partitions.push_back(partition);
+        if( optimal_partitions.empty() ) {
+            optimal_partitions.push_back( partition );
         }
-        return current_quality;
+        return compute_quality( internals );
     }
 }
 
@@ -422,7 +390,7 @@ double find_optimal_partition_louvain( T& graph, W& weights,
 // thread-local std::mt19937 seeded from std::random_device. This preserves
 // the old call signature for existing callers.
 template<typename P, typename T, typename W, typename QF, typename QFDIFF>
-double find_optimal_partition_louvain_gen( T& graph, W& weights, vec2 null_model_vec,
+double find_optimal_partition_louvain_gen( T& graph, W& weights, const vec2& null_model_vec,
         QF compute_quality, QFDIFF compute_quality_diff, P initial_partition,
         std::vector<P>& optimal_partitions, double minimum_improve )
 {
