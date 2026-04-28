@@ -11,6 +11,10 @@ prints a markdown table.
 - `run_bench.sh` — drives the battery; writes a TSV on stdout and
   progress markers on stderr.
 - `format_bench.py` — turns the TSV into a markdown table.
+- `cmp_partitions.py` — compares two `optimal_partitions.dat` files by
+  canonicalising each hierarchy level (sorted node sets per community)
+  and reporting per-level equality. Useful when Q values match but you
+  want to know whether the partitions themselves agree.
 - `RESULTS.md` — detailed write-up of one run.
 
 ## Running

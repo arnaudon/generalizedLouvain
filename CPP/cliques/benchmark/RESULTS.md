@@ -91,14 +91,36 @@ based design wins by orders of magnitude.
 The peak of **185×** at 25k ER is the cleanest expression of this
 effect: 148 s of baseline turns into 0.8 s.
 
-## Q correctness
+## Correctness checks
 
-Every row has `Q match: exact` — the printed stability strings are
-identical to master byte-for-byte on these inputs. The PR description
-mentions a 4-clique-ring symmetric input where the queue-based version
-can land on a different (equivalent) bisection at the same Q. None of
-the SBM or ER configurations above triggered that; with non-degenerate
-spectra the new code converges to the same partition as the sweep loop.
+Two different things to check:
+
+**Stability values.** Every row has `Q match: exact` — the printed
+stability strings are identical to master byte-for-byte on every
+configuration in the table. No Q regression on any input.
+
+**Partition assignments.** A separate check (cmp_partitions.py
+canonicalises by sorting nodes within each community and comparing
+the set-of-sets) gives a more nuanced picture:
+
+| input  | result |
+|--------|--------|
+| sbm-2k, sbm-5k, sbm-10k | **bit-identical at every hierarchy level** |
+| er-2k | identical |
+| er-5k | hierarchy depths differ (3 vs 2 levels); same final-level partition |
+| er-10k | level 0 has 4641 vs 4697 communities; same final-level partition |
+
+The pattern matches the queue-based-fast-move caveat in PR #3:
+**signal-bearing inputs (SBM) reach the same local optimum as the
+sweep loop, structureless inputs (ER) can reach a different
+equally-good local optimum**. Q is the same in both cases — that's
+what `Q match: exact` confirms — but the intermediate clustering can
+differ on inputs that admit many same-Q partitions.
+
+In practical terms: if you run the algorithm on graphs with planted
+structure (the typical use case), expect bit-identical partitions to
+master. If you run it on near-uniform noise, expect equivalent Q with
+possibly different clusterings at the intermediate levels.
 
 ## Reproducing this run
 
