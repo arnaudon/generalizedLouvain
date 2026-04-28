@@ -177,7 +177,13 @@ double find_optimal_partition_louvain_gen( T& graph, W& weights, vec2 null_model
     }
 
     //clq::output( "Reshuffling ", lemon::countNodes( graph ), "Nodes" );
-    std::shuffle( nodes_ordered_randomly.begin(), nodes_ordered_randomly.end(), rng );
+    // Portable Fisher-Yates: bit-identical across libstdc++/libc++ given the
+    // same mt19937 state. std::shuffle's internal distribution is
+    // implementation-defined and would diverge between platforms.
+    for( std::size_t i = nodes_ordered_randomly.size(); i > 1; --i ) {
+        std::size_t j = rng() % i;
+        std::swap( nodes_ordered_randomly[j], nodes_ordered_randomly[i - 1] );
+    }
     //clq::output( "Reshuffling done" );
 
     do {
@@ -320,7 +326,13 @@ double find_optimal_partition_louvain( T& graph, W& weights,
     }
 
     //clq::output( "Reshuffling ", lemon::countNodes( graph ), "Nodes" );
-    std::shuffle( nodes_ordered_randomly.begin(), nodes_ordered_randomly.end(), rng );
+    // Portable Fisher-Yates: bit-identical across libstdc++/libc++ given the
+    // same mt19937 state. std::shuffle's internal distribution is
+    // implementation-defined and would diverge between platforms.
+    for( std::size_t i = nodes_ordered_randomly.size(); i > 1; --i ) {
+        std::size_t j = rng() % i;
+        std::swap( nodes_ordered_randomly[j], nodes_ordered_randomly[i - 1] );
+    }
     //clq::output( "Reshuffling done" );
 
     do {
