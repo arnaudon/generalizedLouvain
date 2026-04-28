@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <random>
 #include <vector>
 #include "graphhelpers.h"
 #include "stability_gen.h"
@@ -145,7 +147,8 @@ vec2 create_reduced_null_model_vec( std::map<int, int> new_comm_id_to_old_comm_i
 template<typename P, typename T, typename W, typename QF, typename QFDIFF>
 double find_optimal_partition_louvain_gen( T& graph, W& weights, vec2 null_model_vec,
         QF compute_quality, QFDIFF compute_quality_diff, P initial_partition,
-        std::vector<P>& optimal_partitions, double minimum_improve )
+        std::vector<P>& optimal_partitions, double minimum_improve,
+        std::mt19937& rng )
 {
 
     typedef typename T::Node Node;
@@ -166,9 +169,7 @@ double find_optimal_partition_louvain_gen( T& graph, W& weights, vec2 null_model
     //clq::print_partition_list( partition );
     //clq::output( "end partition list \n" );
 
-    // Randomise the looping over nodes. You should nitialise random number generator
-    // outside louvain when calling externally multiple times!
-    // srand(std::time(0));
+    // Randomise the looping over nodes using the caller-provided RNG.
     std::vector<Node> nodes_ordered_randomly;
 
     for( NodeIt temp_node( graph ); temp_node != lemon::INVALID; ++temp_node ) {
@@ -176,7 +177,7 @@ double find_optimal_partition_louvain_gen( T& graph, W& weights, vec2 null_model
     }
 
     //clq::output( "Reshuffling ", lemon::countNodes( graph ), "Nodes" );
-    std::random_shuffle( nodes_ordered_randomly.begin(), nodes_ordered_randomly.end() );
+    std::shuffle( nodes_ordered_randomly.begin(), nodes_ordered_randomly.end(), rng );
     //clq::output( "Reshuffling done" );
 
     do {
@@ -226,7 +227,7 @@ double find_optimal_partition_louvain_gen( T& graph, W& weights, vec2 null_model
 
     // 2) If there has actually been some movement, then we need to assemble a new graph
     if( do_construct_new_graph == true ) {
-        // Compile P into original partition size. If there has been a move, then we 
+        // Compile P into original partition size. If there has been a move, then we
         // want to store the intermediate result of the Louvain method. If there has been no move, then the
         // partition in the previous level was optimal.
         P partition_original_nodes = fold_partition_into_orginal_graph_size( optimal_partitions, partition );
@@ -234,7 +235,7 @@ double find_optimal_partition_louvain_gen( T& graph, W& weights, vec2 null_model
         //clq::output("Optimal partition: ", optimal_partitions.size());
         //clq::print_partition_list( partition );
         //clq::output( "renormalized partition above; now starting second phase" );
-        
+
         //clq::output( "Constructing new graph" );
         // Create graph from partition
         T reduced_graph;
@@ -254,7 +255,7 @@ double find_optimal_partition_louvain_gen( T& graph, W& weights, vec2 null_model
         //clq::print_2d_vector( reduced_null_model_vec );
 
         return find_optimal_partition_louvain_gen( reduced_graph,reduced_weights,reduced_null_model_vec,compute_quality,
-                compute_quality_diff,reduced_partition,optimal_partitions, minimum_improve );
+                compute_quality_diff,reduced_partition,optimal_partitions, minimum_improve, rng );
     } else {
         //clq::output( "Reached bottom", current_quality );
         if (optimal_partitions.size() == 0){
@@ -282,9 +283,10 @@ double find_optimal_partition_louvain_gen( T& graph, W& weights, vec2 null_model
 
  */
 template<typename P, typename T, typename W, typename QF, typename QFDIFF>
-double find_optimal_partition_louvain( T& graph, W& weights, 
+double find_optimal_partition_louvain( T& graph, W& weights,
         QF compute_quality, QFDIFF compute_quality_diff, P initial_partition,
-        std::vector<P>& optimal_partitions, double minimum_improve )
+        std::vector<P>& optimal_partitions, double minimum_improve,
+        std::mt19937& rng )
 {
 
     typedef typename T::Node Node;
@@ -310,9 +312,7 @@ double find_optimal_partition_louvain( T& graph, W& weights,
     //clq::print_partition_list( partition );
     //clq::output( "end partition list \n" );
 
-    // Randomise the looping over nodes. You should nitialise random number generator
-    // outside louvain when calling externally multiple times!
-    // srand(std::time(0));
+    // Randomise the looping over nodes using the caller-provided RNG.
     std::vector<Node> nodes_ordered_randomly;
 
     for( NodeIt temp_node( graph ); temp_node != lemon::INVALID; ++temp_node ) {
@@ -320,7 +320,7 @@ double find_optimal_partition_louvain( T& graph, W& weights,
     }
 
     //clq::output( "Reshuffling ", lemon::countNodes( graph ), "Nodes" );
-    std::random_shuffle( nodes_ordered_randomly.begin(), nodes_ordered_randomly.end() );
+    std::shuffle( nodes_ordered_randomly.begin(), nodes_ordered_randomly.end(), rng );
     //clq::output( "Reshuffling done" );
 
     do {
@@ -395,14 +395,40 @@ double find_optimal_partition_louvain( T& graph, W& weights,
         //clq::print_2d_vector( reduced_null_model_vec );
 
         return find_optimal_partition_louvain( reduced_graph,reduced_weights,compute_quality,
-                compute_quality_diff,reduced_partition,optimal_partitions, minimum_improve );
+                compute_quality_diff,reduced_partition,optimal_partitions, minimum_improve, rng );
     } else {
         //clq::output( "Reached bottom", current_quality );
         if (optimal_partitions.size() == 0){
             optimal_partitions.push_back(partition);
         }
         return current_quality;
-    }    
+    }
+}
+
+
+// Backwards-compatible overloads: if no RNG is supplied, fall back to a
+// thread-local std::mt19937 seeded from std::random_device. This preserves
+// the old call signature for existing callers.
+template<typename P, typename T, typename W, typename QF, typename QFDIFF>
+double find_optimal_partition_louvain_gen( T& graph, W& weights, vec2 null_model_vec,
+        QF compute_quality, QFDIFF compute_quality_diff, P initial_partition,
+        std::vector<P>& optimal_partitions, double minimum_improve )
+{
+    static thread_local std::mt19937 default_rng{ std::random_device{}() };
+    return find_optimal_partition_louvain_gen( graph, weights, null_model_vec,
+            compute_quality, compute_quality_diff, initial_partition,
+            optimal_partitions, minimum_improve, default_rng );
+}
+
+template<typename P, typename T, typename W, typename QF, typename QFDIFF>
+double find_optimal_partition_louvain( T& graph, W& weights,
+        QF compute_quality, QFDIFF compute_quality_diff, P initial_partition,
+        std::vector<P>& optimal_partitions, double minimum_improve )
+{
+    static thread_local std::mt19937 default_rng{ std::random_device{}() };
+    return find_optimal_partition_louvain( graph, weights,
+            compute_quality, compute_quality_diff, initial_partition,
+            optimal_partitions, minimum_improve, default_rng );
 }
 
 

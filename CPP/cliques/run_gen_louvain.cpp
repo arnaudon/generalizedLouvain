@@ -4,6 +4,8 @@
 #include "io.h"
 
 #include <lemon/smart_graph.h>
+#include <ctime>
+#include <random>
 #include <vector>
 
 // Call generic Louvain optimisation from command line
@@ -11,12 +13,10 @@
 // Example: ./run_gen_louvain.sh graph_file null_model_file time random_seed
 int main(int argc, char *argv []) {
 
-    // initialise random seed from input
-    if (argc < 5) {
-        srand(time(0));
-    } else {
-        srand(atoi(argv[4]));
-    }
+    // initialise random number generator from input
+    unsigned int seed = (argc < 5) ? static_cast<unsigned int>(std::time(nullptr))
+                                   : static_cast<unsigned int>(std::atoi(argv[4]));
+    std::mt19937 rng(seed);
 
     // initialise markov time from input
     double current_markov_time = 1;
@@ -54,7 +54,7 @@ int main(int argc, char *argv []) {
     clq::output("Start Louvain");
     double stability = clq::find_optimal_partition_louvain_gen<partition>(
                            input_graph, input_graph_weights, null_model, quality, quality_gain,
-                           start_partition, optimal_partitions, 1e-18);
+                           start_partition, optimal_partitions, 1e-18, rng);
     
     // store output partitions in file
     clq::partitions_to_file("optimal_partitions.dat", optimal_partitions);
