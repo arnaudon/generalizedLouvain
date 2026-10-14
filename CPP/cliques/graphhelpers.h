@@ -72,17 +72,6 @@ NeighbourCache build_neighbour_cache(G &graph, M &weights) {
     return cache;
 }
 
-template<typename G>
-int find_unweighted_degree(G &graph, int node_id) {
-	int count = 0;
-	typename G::Node n = graph.nodeFromId(node_id);
-
-	for (typename G::IncEdgeIt e(graph, n); e != lemon::INVALID; ++e) {
-		++count;
-	}
-	return count;
-}
-
 template<typename G, typename M, typename NO>
 double find_weighted_degree(G &graph, M &weights, NO node) {
 	double degree = 0.0;
@@ -94,16 +83,6 @@ double find_weighted_degree(G &graph, M &weights, NO node) {
 		}
 	}
 	return degree;
-}
-
-template<typename G, typename M, typename NO>
-double find_weight_selfloops(G &graph, M &weights, NO node) {
-	typename G::Edge edge = lemon::findEdge(graph, node, node);
-	if (edge == lemon::INVALID) {
-		return 0.0;
-	} else {
-		return double(weights[edge]);
-	}
 }
 
 template<typename G, typename M>
@@ -181,44 +160,6 @@ void create_reduced_graph_from_partition(G &reduced_graph,
 		Edge e = reduced_graph.addEdge(nu, nv);
 		reduced_weight_map[e] = kv.second;
 	}
-}
-
-// find weight to all communities excluding self-loops (to own community)
-template<typename G, typename P, typename W, typename NO>
-std::map<int, double> find_weight_node_to_communities(G &graph, P &partition,
-		W &weights, NO node) {
-	std::map<int, double> community_to_weight;
-
-	for (typename G::IncEdgeIt e(graph, node); e != lemon::INVALID; ++e) {
-		if (graph.u(e) != graph.v(e)) {
-			double edge_weight = weights[e];
-			NO opposite_node = graph.oppositeNode(node, e);
-			int comm_node = partition.find_set(graph.id(opposite_node));
-			community_to_weight[comm_node] += edge_weight;
-		}
-	}
-	//clq::print_map(community_to_weight);
-	return community_to_weight;
-}
-
-// find weight to specific community excluding self-loops (to own community)
-template<typename G, typename P, typename W, typename NO>
-double find_weight_node_to_community(G &graph, P &partition, W &weights,
-		NO node, int comm_id) {
-
-	double summed_weight = 0.0;
-	for (typename G::IncEdgeIt e(graph, node); e != lemon::INVALID; ++e) {
-		if (graph.u(e) != graph.v(e)) {
-			double edge_weight = weights[e];
-			NO opposite_node = graph.oppositeNode(node, e);
-			int comm_node = partition.find_set(graph.id(opposite_node));
-			if (comm_node == comm_id) {
-				summed_weight += edge_weight;
-			}
-		}
-	}
-
-	return summed_weight;
 }
 
 }
