@@ -15,8 +15,7 @@
 #include <string>
 #include <vector>
 
-#include <lemon/smart_graph.h>
-
+#include "../graph.h"
 #include "../io.h"
 #include "../louvain_gen.h"
 #include "../stability.h"
@@ -57,73 +56,66 @@ struct TestGraph {
     std::vector<Edge> edges;
 };
 
-// Graph adapter: the only code that knows the graph type of the library.
-struct LibGraph {
-    lemon::SmartGraph graph;
-    lemon::SmartGraph::EdgeMap<double> weights;
-
-    explicit LibGraph(const TestGraph &g) : graph(), weights(graph)
-    {
-        for (int i = 0; i < g.num_nodes; ++i) {
-            graph.addNode();
-        }
-        for (const Edge &e : g.edges) {
-            weights.set(graph.addEdge(graph.nodeFromId(e.u), graph.nodeFromId(e.v)), e.w);
-        }
+clq::Graph make_graph(const TestGraph &g)
+{
+    clq::Graph graph(g.num_nodes);
+    for (const Edge &e : g.edges) {
+        graph.add_edge(e.u, e.v, e.w);
     }
-};
+    return graph;
+}
 
 double run_generic(const TestGraph &g, const vec2 &null_model, double time,
                    unsigned int seed, std::vector<Partition> &levels)
 {
-    LibGraph lib(g);
+    clq::Graph graph = make_graph(g);
     Partition start(g.num_nodes);
     start.initialise_as_singletons();
     std::mt19937 rng(seed);
     clq::find_linearised_generic_stability quality(time);
     clq::linearised_generic_stability_gain gain(time);
     return clq::find_optimal_partition_louvain_gen<Partition>(
-               lib.graph, lib.weights, null_model, quality, gain, start, levels, 1e-18, rng);
+               graph, null_model, quality, gain, start, levels, 1e-18, rng);
 }
 
 template<typename QF, typename QFDIFF>
 double run_standard(const TestGraph &g, double time, unsigned int seed,
                     std::vector<Partition> &levels)
 {
-    LibGraph lib(g);
+    clq::Graph graph = make_graph(g);
     Partition start(g.num_nodes);
     start.initialise_as_singletons();
     std::mt19937 rng(seed);
     QF quality(time);
     QFDIFF gain(time);
     return clq::find_optimal_partition_louvain<Partition>(
-               lib.graph, lib.weights, quality, gain, start, levels, 1e-18, rng);
+               graph, quality, gain, start, levels, 1e-18, rng);
 }
 
 // Generic quality of a partition, from the internals of the library.
 double library_generic_quality(const TestGraph &g, const vec2 &null_model, double time,
                                Partition partition)
 {
-    LibGraph lib(g);
-    clq::LinearisedInternalsGeneric internals(lib.graph, lib.weights, partition, null_model);
+    clq::Graph graph = make_graph(g);
+    clq::LinearisedInternalsGeneric internals(graph, partition, null_model);
     clq::find_linearised_generic_stability quality(time);
     return quality(internals);
 }
 
 double library_normalised_quality(const TestGraph &g, double time, Partition partition)
 {
-    LibGraph lib(g);
+    clq::Graph graph = make_graph(g);
     clq::find_linearised_normalised_stability quality(time);
-    return quality(lib.graph, partition, lib.weights);
+    return quality(graph, partition);
 }
 
 double library_combinatorial_quality(const TestGraph &g, double time, Partition partition)
 {
-    LibGraph lib(g);
+    clq::Graph graph = make_graph(g);
     Partition partition_init(g.num_nodes);
     partition_init.initialise_as_singletons();
     clq::find_linearised_combinatorial_stability quality(time);
-    return quality(lib.graph, partition, lib.weights, partition_init);
+    return quality(graph, partition, partition_init);
 }
 
 // Generic quality of a partition, calculated independently of the library:
@@ -374,10 +366,9 @@ void test_planted_partition_is_found()
 
 void test_triangle_files(const std::string &dir)
 {
-    lemon::SmartGraph graph;
-    lemon::SmartGraph::EdgeMap<double> weights(graph);
-    clq::read_edgelist_weighted_graph(dir + "/triangletest.edj", graph, weights);
-    int num_nodes = lemon::countNodes(graph);
+    clq::Graph graph;
+    clq::read_edgelist_weighted_graph(dir + "/triangletest.edj", graph);
+    int num_nodes = graph.num_nodes();
     CHECK(num_nodes == 6);
     vec2 null_model = clq::read_null_model(dir + "/triangletest_null.edj", num_nodes);
     CHECK(null_model.size() == 2);
@@ -389,7 +380,7 @@ void test_triangle_files(const std::string &dir)
     clq::find_linearised_generic_stability quality(1.0);
     clq::linearised_generic_stability_gain gain(1.0);
     double q = clq::find_optimal_partition_louvain_gen<Partition>(
-                   graph, weights, null_model, quality, gain, start, levels, 1e-18, rng);
+                   graph, null_model, quality, gain, start, levels, 1e-18, rng);
     check_levels(levels, num_nodes);
     check_reference("triangle_files_seed42", q, levels.back());
 }

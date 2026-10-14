@@ -17,10 +17,10 @@ struct find_linearised_normalised_stability {
     {
     }
 
-    template<typename G, typename P, typename W>
-    double operator () (G& graph, P& partition, W& weights)
+    template<typename P>
+    double operator () (const Graph& graph, P& partition)
     {
-        clq::LinearisedInternals internals(graph, weights, partition);
+        clq::LinearisedInternals internals(graph, partition);
         return (*this) (internals);
     }
 
@@ -96,11 +96,11 @@ struct linearised_normalised_stability_gain {
 };
 
 // Linearised combinatorial stability with partition given
-template<typename G, typename M, typename P>
+template<typename P>
 clq::LinearisedInternals gen_internals( find_linearised_normalised_stability X,
-                                  G& graph, M& weights, P& partition, P& partition_init )
+                                  const Graph& graph, P& partition, P& partition_init )
 {
-    LinearisedInternals internals( graph, weights, partition );
+    LinearisedInternals internals( graph, partition );
     return internals;
 }
 
@@ -119,11 +119,10 @@ struct find_linearised_combinatorial_stability {
     {
     }
 
-    template<typename G, typename P, typename W>
-    double operator () (G& graph, P& partition, W& weights, P& partition_init)
+    template<typename P>
+    double operator () (const Graph& graph, P& partition, P& partition_init)
     {
-        clq::LinearisedInternalsComb internals (graph, weights, partition,
-                                                partition_init);
+        clq::LinearisedInternalsComb internals (graph, partition, partition_init);
         return (*this) (internals);
     }
 
@@ -184,11 +183,11 @@ struct linearised_combinatorial_stability_gain {
 };
 
 // Linearised combinatorial stability with partition given
-template<typename G, typename M, typename P>
+template<typename P>
 clq::LinearisedInternalsComb gen_internals( find_linearised_combinatorial_stability X,
-                                  G& graph, M& weights, P& partition, P& partition_init )
+                                  const Graph& graph, P& partition, P& partition_init )
 {
-    LinearisedInternalsComb internals( graph, weights, partition, partition_init );
+    LinearisedInternalsComb internals( graph, partition, partition_init );
     return internals;
 }
 }
