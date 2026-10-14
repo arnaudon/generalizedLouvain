@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "../compensated_sum.h"
 #include "../graph.h"
 #include "../io.h"
 #include "../louvain_gen.h"
@@ -245,15 +246,15 @@ struct Reference {
 
 const Reference references[] = {
     {"generic_modularity_seed0", 0.4462074687228928, 10928742383526330306ull, 6},
-    {"generic_modularity_seed1", 0.44696469980746495, 11147939978088631755ull, 6},
+    {"generic_modularity_seed1", 0.446964699807465, 11147939978088631755ull, 6},
     {"generic_modularity_seed2", 0.46404726633281324, 6784018557408576015ull, 5},
-    {"generic_modularity_seed3", 0.45512264467285563, 2932209541537649572ull, 5},
+    {"generic_modularity_seed3", 0.45512264467285568, 2932209541537649572ull, 5},
     {"generic_modularity_t0.3", 0.76241237136123696, 5848503960239146080ull, 20},
     {"generic_two_pairs_t0.7", 0.53002223677561244, 7949468812565776579ull, 10},
     {"generic_large_t1", 0.47503246840150387, 18396511715021903318ull, 10},
     {"normalised_t1", 0.45380260670110151, 9107574923049613561ull, 5},
-    {"normalised_large_t0.5", 0.68641706740215214, 3909507305208399923ull, 15},
-    {"combinatorial_t0.5", 0.65806925972396479, 14161383697746804514ull, 13},
+    {"normalised_large_t0.5", 0.68641706740215203, 3909507305208399923ull, 15},
+    {"combinatorial_t0.5", 0.65806925972396491, 14161383697746804514ull, 13},
     {"triangle_files_seed42", 4.9999999985999999, 215615651957586990ull, 2},
 };
 
@@ -385,6 +386,47 @@ void test_triangle_files(const std::string &dir)
     check_reference("triangle_files_seed42", q, levels.back());
 }
 
+// The compensated sum gives the correctly rounded sum where a simple sum does not.
+void test_compensated_sum()
+{
+    clq::CompensatedSum sum;
+    double simple_sum = 0.0;
+    for (int i = 0; i < 10000000; ++i) {
+        sum.add(0.1);
+        simple_sum += 0.1;
+    }
+    CHECK(sum.value() == 1e6);
+    CHECK(simple_sum != 1e6);
+
+    // A term larger than the sum: plain Kahan summation gives 0 here.
+    clq::CompensatedSum cancel;
+    cancel.add(1.0);
+    cancel.add(1e100);
+    cancel.add(1.0);
+    cancel.add(-1e100);
+    CHECK(cancel.value() == 2.0);
+}
+
+// Minimal internals for the generic quality functor.
+struct FakeGenericInternals {
+    unsigned int num_nodes;
+    unsigned int num_null_model_vectors;
+    std::vector<double> comm_w_in;
+    vec2 comm_loss_vectors;
+};
+
+void test_generic_quality_cancellation()
+{
+    // Gain and loss terms that cancel: the exact quality is 1 - t + 2t.
+    FakeGenericInternals internals;
+    internals.num_nodes = 4;
+    internals.num_null_model_vectors = 2;
+    internals.comm_w_in = {1.0, 1e17, 1.0, 0.0};
+    internals.comm_loss_vectors = vec2{{0.0, 0.0, 0.0, 1e9}, {0.0, 0.0, 0.0, 1e8}};
+    clq::find_linearised_generic_stability quality(1.0);
+    CHECK(quality(internals) == 2.0);
+}
+
 }  // namespace
 
 int main(int argc, char *argv[])
@@ -418,6 +460,8 @@ int main(int argc, char *argv[])
     test_standard<clq::find_linearised_combinatorial_stability,
                   clq::linearised_combinatorial_stability_gain>("combinatorial_t0.5", pp, 0.5,
                           11u, false);
+    test_compensated_sum();
+    test_generic_quality_cancellation();
     test_planted_partition_is_found();
     test_triangle_files(data_dir);
 

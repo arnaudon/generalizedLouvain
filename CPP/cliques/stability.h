@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include "compensated_sum.h"
 #include "graphhelpers.h"
 #include "linearised_internals_norm.h"
 #include "linearised_internals_comb.h"
@@ -27,19 +28,21 @@ struct find_linearised_normalised_stability {
     template<typename I>
     double operator () (I& internals)
     {
-        double q = 1.0 - markov_time;
+        // Compensated sum: the error does not increase with the number of terms.
+        CompensatedSum q;
+        q.add (1.0 - markov_time);
         int size = internals.comm_w_tot.size();
 
         for (int i = 0; i < size; i++) {
             if (internals.comm_w_tot[i] > 0) {
-                q += markov_time * double (internals.comm_w_in[i] / internals.two_m) -
-                     ( (double (internals.comm_w_tot[i]) / internals.two_m) *
-                       (double (internals.comm_w_tot[i]) / internals.two_m) );
+                q.add (markov_time * double (internals.comm_w_in[i] / internals.two_m) -
+                       ( (double (internals.comm_w_tot[i]) / internals.two_m) *
+                         (double (internals.comm_w_tot[i]) / internals.two_m) ) );
             }
 
         }
 
-        return q;
+        return q.value();
     }
 
     template<typename I>
@@ -129,24 +132,26 @@ struct find_linearised_combinatorial_stability {
     template<typename I>
     double operator () (I& internals)
     {
-        double q = 1.0 - markov_time;
+        // Compensated sum: the error does not increase with the number of terms.
+        CompensatedSum q;
+        q.add (1.0 - markov_time);
         int size = internals.comm_tot_nodes.size();
         //				clq::output("time", markov_time, "size", size);
 
         for (int i = 0; i < size; i++) {
             //			clq::print_collection(internals.comm_tot_nodes);
             if (internals.comm_tot_nodes[i] > 0) {
-                q += markov_time * double (internals.comm_w_in[i]
-                                           / internals.two_m)
-                     - ( (double (internals.comm_tot_nodes[i])
-                          / internals.num_nodes_init)
-                         * (double (internals.comm_tot_nodes[i])
-                            / internals.num_nodes_init) );
+                q.add (markov_time * double (internals.comm_w_in[i]
+                                             / internals.two_m)
+                       - ( (double (internals.comm_tot_nodes[i])
+                            / internals.num_nodes_init)
+                           * (double (internals.comm_tot_nodes[i])
+                              / internals.num_nodes_init) ) );
             }
 
         }
 
-        return q;
+        return q.value();
     }
 };
 
